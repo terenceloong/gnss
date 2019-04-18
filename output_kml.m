@@ -1,0 +1,1 @@
+kmlwriteline('traj.kml', posResult(:,1),posResult(:,2), 'Color','g', 'Width',2);

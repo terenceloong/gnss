@@ -29,7 +29,7 @@ while 1
 %         error('Position iteration exceeds the threshold!');
 %     end
     if norm(x-x0)<1e-6
-        break;
+        break
     end
     x0 = x;
 end

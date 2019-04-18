@@ -1,135 +1,91 @@
-%% 计时开始
-tic
+% 运行双天线前先运行45s单天线，看星历是否正确，还可以预置星历
+% 星历不正确会导致码的发射时间不正确，影响定位
 
-%% 捕获结果
-acqPRN = find(~isnan(acqResults(:,1)))'; %捕获到的卫星编号列表
-chN = length(acqPRN); %通道数量
+%% 计时开始
+clear
+clc
+tic
+% 4颗卫星10s数据耗时约16s
+
+%% 文件路径
+file_path = 'E:\GNSS data\outdoor_static\data_20190409_213910_ch1.dat';
+sample_offset = 0*4e6;
 
 %% 全局变量
-msToProcess = 60*1000; %处理总时间
+msToProcess = 45*1000; %处理总时间
 sampleFreq = 4e6; %接收机采样频率
 
-buffBlkNum = 40;                     %采样数据缓存块数量
-buffBlkSize = 4000;                  %一个块的采样点数
+p0 = [45.74088083, 126.62694533, 197]; %参考位置********************
+
+buffBlkNum = 40;                     %采样数据缓存块数量（要保证捕获时存储恰好从头开始）
+buffBlkSize = 4000;                  %一个块的采样点数（1ms）
 buffSize = buffBlkSize * buffBlkNum; %采样数据缓存大小
 buff = zeros(1,buffSize);            %采样数据缓存
 buffBlkPoint = 0;                    %数据该往第几块存，从0开始
 buffHead = 0;                        %最新数据的序号，buffBlkSize的倍数
 
-%% 时间
-tf = sscanf(file_path((end-22):(end-8)), '%4d%02d%02d_%02d%02d%02d')';
-[~, tf] = gps_time(tf); %数据文件开始采样时间（GPS时间，周内的秒数）
-ta = [tf,0,0] + sample2dt(sample_offset, sampleFreq); %初始化接收机时间
+%% 1.获取文件时间
+tf = sscanf(file_path((end-22):(end-8)), '%4d%02d%02d_%02d%02d%02d')'; %数据文件开始采样时间（日期时间数组）
+[tw, ts] = gps_time(tf); %tw：GPS周数，ts：GPS周内秒数
+ta = [ts,0,0] + sample2dt(sample_offset, sampleFreq); %初始化接收机时间，[s,ms,us]
 ta = time_carry(round(ta,2)); %取整
 
-%% 初始化通道
-channel = GPS_L1_CA_channel_struct();
-channels = repmat(channel, chN,1);
-clearvars channel
-for k=1:chN
-    PRN = acqPRN(k);
-    code = GPS_L1_CA_generate(PRN);
-    channels(k).PRN = PRN;
-    channels(k).n = 1;
-    channels(k).state = 0;
-    channels(k).trackStage = 'freqPull';
-    channels(k).msgStage = 'idle';
-    channels(k).cnt = 0;
-    channels(k).code = [code(end),code,code(1)];
-    channels(k).timeInt = 0.001;
-    channels(k).timeIntMs = 1;
-    channels(k).codeInt = 1023;
-    channels(k).trackDataTail = sampleFreq*0.001 - acqResults(PRN,1) + 2;
-    channels(k).blkSize = sampleFreq * 0.001;
-    channels(k).trackDataHead = channels(k).trackDataTail + channels(k).blkSize - 1;
-    channels(k).dataIndex = channels(k).trackDataTail;
-    channels(k).ts0 = NaN;
-    channels(k).carrNco = acqResults(PRN,2);
-    channels(k).codeNco = 1.023e6 + channels(k).carrNco/1540;
-    channels(k).carrAcc = 0;
-    channels(k).carrFreq = channels(k).carrNco;
-    channels(k).codeFreq = channels(k).codeNco;
-    channels(k).remCarrPhase = 0;
-    channels(k).remCodePhase = 0;
-    channels(k).I_P0 = NaN;
-    channels(k).Q_P0 = NaN;
-    channels(k).FLL.K = 40;
-    channels(k).FLL.Int = channels(k).carrNco;
-    [K1, K2] = orderTwoLoopCoef(25, 0.707, 1);
-    channels(k).PLL.K1 = K1;
-    channels(k).PLL.K2 = K2;
-    channels(k).PLL.Int = 0;
-    [K1, K2] = orderTwoLoopCoef(2, 0.707, 1);
-    channels(k).DLL.K1 = K1;
-    channels(k).DLL.K2 = K2;
-    channels(k).DLL.Int = channels(k).codeNco;
-    channels(k).bitSyncTable = zeros(1,20);
-    channels(k).bitBuff = zeros(1,20);
-    channels(k).frameBuff = zeros(1,1502);
-    channels(k).frameBuffPoint = 0;
-    channels(k).ephemeris = zeros(26,1);
-    % 计算码鉴相器误差标准差结构体
-    channels(k).codeStd.buff = zeros(1,200);
-    channels(k).codeStd.buffSize = length(channels(k).codeStd.buff);
-    channels(k).codeStd.buffPoint = 0;
-    channels(k).codeStd.E0 = 0;
-    channels(k).codeStd.D0 = 0;
-    % 计算载波鉴相器误差标准差结构体
-    channels(k).carrStd.buff = zeros(1,200);
-    channels(k).carrStd.buffSize = length(channels(k).carrStd.buff);
-    channels(k).carrStd.buffPoint = 0;
-    channels(k).carrStd.E0 = 0;
-    channels(k).carrStd.D0 = 0;
-    channels(k).Px = diag([0.02, 0.01, 5, 1].^2); %6m, 3.6deg, 5Hz, 1Hz/s
+%% 2.根据历书获取当前可能见到的卫星
+% svList = [2;6;12];
+svList = gps_constellation(tf, p0);
+svN = length(svList);
+
+%% 3.为每颗可能见到的卫星分配跟踪通道
+channels = repmat(GPS_L1_CA_channel_struct(), svN,1);
+for k=1:svN
+    channels(k).PRN = svList(k);
+    channels(k).state = 0; %状态未激活
 end
 
-%% 创建跟踪结果存储空间
-dn = 100;
-trackResult.PRN = 0;
-trackResult.dataIndex     = zeros(msToProcess+dn,1); %码周期开始采样点在原始数据文件中的位置
-trackResult.ts0           = zeros(msToProcess+dn,1); %码周期理论发射时间，ms
-trackResult.remCodePhase  = zeros(msToProcess+dn,1); %码周期开始采样点的码相位，码片
-trackResult.codeFreq      = zeros(msToProcess+dn,1); %码频率
-trackResult.remCarrPhase  = zeros(msToProcess+dn,1); %码周期开始采样点的载波相位，周
-trackResult.carrFreq      = zeros(msToProcess+dn,1); %载波频率
-trackResult.I_Q           = zeros(msToProcess+dn,6); %[I_P,I_E,I_L,Q_P,Q_E,Q_L]
-trackResult.disc          = zeros(msToProcess+dn,6); %[codeError,carrError,freqError]
-trackResult.bitStartFlag  = zeros(msToProcess+dn,1);
-trackResults = repmat(trackResult, chN,1);
-clearvars trackResult
-for k=1:chN
-    trackResults(k).PRN = acqPRN(k);
-end
-
-%% 创建测量结果存储空间
-measureResults = cell(1,chN+1); %第一列是时间，其他是各个通道
-measureResults{1} = zeros(msToProcess/10,3); %接收机时间，[s,ms,us]
-for k=1:chN
-    measureResults{k+1} = ones(msToProcess/10,8)*NaN;
-end
-posResult = ones(msToProcess/10,8)*NaN; %存定位结果
-
-%% 打开文件，创建进度条
-fileID = fopen(file_path, 'r');
-if fileID~=3 %关闭以前打开的文件
-    for k=3:(fileID-1)
-        fclose(k);
+%% 预置星历
+ephemeris_file = ['./ephemeris/',file_path((end-22):(end-8)),'.mat'];
+if exist(ephemeris_file, 'file')
+    load(ephemeris_file);
+    for k=1:svN
+        channels(k).ephemeris = ephemeris(k).ephemeris;
     end
 end
+
+%% 4.创建跟踪结果存储空间
+trackResults = repmat(trackResult_struct(msToProcess+100), svN,1);
+for k=1:svN
+    trackResults(k).PRN = svList(k);
+end
+
+%% 5.创建测量结果存储空间
+m = msToProcess/10;
+% 接收机时间
+receiverTime = zeros(m,3); %[s,ms,us]
+%定位结果
+posResult = ones(m,8) * NaN; %位置、速度、钟差、钟频差
+%各卫星位置、伪距、速度、伪距率测量结果
+measureResults = cell(svN,1);
+for k=1:svN
+    measureResults{k} = ones(m,8) * NaN;
+end
+
+%% 6.打开文件，创建进度条
+fclose('all'); %关闭之前打开的所有文件
+fileID = fopen(file_path, 'r');
 fseek(fileID, round(sample_offset*4), 'bof'); %不取整可能出现文件指针移不过去
 if int32(ftell(fileID))~=int32(sample_offset*4)
     error('Sample offset error!');
 end
 f = waitbar(0, ['0s/',num2str(msToProcess/1000),'s']);
 
-%% 信号处理
+%% 7.信号处理
 for t=1:msToProcess
     % 更新进度条
-    if mod(t,1000)==0
+    if mod(t,1000)==0 %1s步进
         waitbar(t/msToProcess, f, [num2str(t/1000),'s/',num2str(msToProcess/1000),'s']);
     end
     
-    % 1.读数据（每10s数据用1.2s）
+    % 读数据（每10s数据用1.2s）
     rawData = double(fread(fileID, [2,buffBlkSize], 'int16')); %取数据，行向量
     buff(buffBlkPoint*buffBlkSize+(1:buffBlkSize)) = rawData(1,:) + rawData(2,:)*1i; %转换成复信号,往缓存里放
     buffBlkPoint = buffBlkPoint + 1;
@@ -138,120 +94,187 @@ for t=1:msToProcess
         buffBlkPoint = 0; %缓存从头开始
     end
     
-    % 2.更新接收机时间（当前最后一个采样的接收机时间）
-	ta = time_carry(ta + sample2dt(buffBlkSize, sampleFreq));
+    % 更新接收机时间（当前最后一个采样的接收机时间）
+% 	ta = time_carry(ta + sample2dt(buffBlkSize, sampleFreq));
+    ta = time_carry(ta + [0,1,0]);
     
-    % 3.通道处理
-    for k=1:chN %第k个通道
-        while 1
-            % 判断是否有完整的跟踪数据
-            if mod(buffHead-channels(k).trackDataHead,buffSize)>(buffSize/2)
-                break
+    %% 捕获（1s搜索一次）
+    if mod(t,1000)==0
+        for k=1:svN %搜索所有可能见到的卫星
+            if channels(k).state==0 %如果通道未激活，捕获尝试激活
+                [acqResult, peakRatio] = GPS_L1_CA_acq_one(svList(k), buff((end-2*8000+1):end));
+                if ~isempty(acqResult) %成功捕获
+                    channels(k) = GPS_L1_CA_channel_init(channels(k), acqResult, t*buffBlkSize, sampleFreq); %激活通道
+                    trackResults(k).log = [trackResults(k).log; ...
+                                             string(['Acquired at ',num2str(t/1000),'s, peakRatio=',num2str(peakRatio)])];
+                end
             end
-            
-            % 存跟踪结果（通道参数）
-            n = channels(k).n;
-            trackResults(k).dataIndex(n,:)    = channels(k).dataIndex;
-            trackResults(k).ts0(n,:)          = channels(k).ts0;
-            trackResults(k).remCodePhase(n,:) = channels(k).remCodePhase;
-            trackResults(k).codeFreq(n,:)     = channels(k).codeFreq;
-            trackResults(k).remCarrPhase(n,:) = channels(k).remCarrPhase;
-            trackResults(k).carrFreq(n,:)     = channels(k).carrFreq;
-            
-            % 基带处理
-            trackDataHead = channels(k).trackDataHead;
-            trackDataTail = channels(k).trackDataTail;
-            if trackDataHead>trackDataTail
-                [channels(k), I_Q, disc, bitStartFlag] = ...
-                    GPS_L1_CA_track(channels(k), sampleFreq, buffSize, buff(trackDataTail:trackDataHead));
-            else
-                [channels(k), I_Q, disc, bitStartFlag] = ...
-                    GPS_L1_CA_track(channels(k), sampleFreq, buffSize, [buff(trackDataTail:end),buff(1:trackDataHead)]);
-            end
-            
-            % 存跟踪结果（跟踪结果）
-            trackResults(k).I_Q(n,:)          = I_Q; 
-            trackResults(k).disc(n,:)         = disc;
-            trackResults(k).bitStartFlag(n,:) = bitStartFlag;
         end
     end
     
-    % 4.测量结果（每40000个采样点测量一次）
-    % 本地钟不准不光影响测距，还会对地球自转坐标变换带来影响，要实时修正钟差和钟频差
+    %% 跟踪
+    for k=1:svN %第k个通道
+        if channels(k).state~=0 %如果通道激活，进行跟踪
+            while 1
+                % 判断是否有完整的跟踪数据
+                if mod(buffHead-channels(k).trackDataHead,buffSize)>(buffSize/2)
+                    break
+                end
+                % 存跟踪结果（通道参数）
+                n = trackResults(k).n;
+                trackResults(k).dataIndex(n,:)    = channels(k).dataIndex;
+                trackResults(k).ts0(n,:)          = channels(k).ts0;
+                trackResults(k).remCodePhase(n,:) = channels(k).remCodePhase;
+                trackResults(k).codeFreq(n,:)     = channels(k).codeFreq;
+                trackResults(k).remCarrPhase(n,:) = channels(k).remCarrPhase;
+                trackResults(k).carrFreq(n,:)     = channels(k).carrFreq;
+                % 基带处理
+                trackDataHead = channels(k).trackDataHead;
+                trackDataTail = channels(k).trackDataTail;
+                if trackDataHead>trackDataTail
+                    [channels(k), I_Q, disc, bitStartFlag, others, log] = ...
+                        GPS_L1_CA_track(channels(k), sampleFreq, buffSize, buff(trackDataTail:trackDataHead));
+                else
+                    [channels(k), I_Q, disc, bitStartFlag, others, log] = ...
+                        GPS_L1_CA_track(channels(k), sampleFreq, buffSize, [buff(trackDataTail:end),buff(1:trackDataHead)]);
+                end
+                % 存跟踪结果（跟踪结果）
+                trackResults(k).I_Q(n,:)          = I_Q; 
+                trackResults(k).disc(n,:)         = disc;
+                trackResults(k).bitStartFlag(n,:) = bitStartFlag;
+                trackResults(k).CN0(n,:)          = channels(k).CN0;
+                trackResults(k).others(n,:)       = others;
+                trackResults(k).log               = [trackResults(k).log; log];
+                trackResults(k).n                 = n + 1;
+            end
+        end
+    end
+    
+    %% 定位（每10ms一次）
     if mod(t,10)==0
-        sv = zeros(chN,8);
-        n = t/10;
-        measureResults{1}(n,:) = ta; %存接收机时间
-        for k=1:chN
-            if channels(k).state==1 %已经解析到星历
-                dn = mod(buffHead-channels(k).trackDataTail+buffSize/2, buffSize) - buffSize/2;
+        n = t/10; %行号
+        receiverTime(n,:) = ta; %存接收机时间
+        sv = zeros(svN,8);
+        for k=1:svN %计算各通道伪距
+            if channels(k).state==2 %已经解析到星历
+                dn = mod(buffHead-channels(k).trackDataTail+1, buffSize) - 1; %trackDataTail恰好超前buffHead一个时，dn=-1
                 codePhase = channels(k).remCodePhase + (dn/sampleFreq)*channels(k).codeFreq; %当前码相位
-                %----------------------------------------------------------------------------------------------------------%
-%                 ts0 = channels(k).ts0/1e3 + codePhase/1.023e6;
-%                 tr = ta(1) + ta(2)/1e3 + ta(3)/1e6;
-%                 [sv(k,:),~] = sv_ecef_0(channels(k).ephemeris, tr, ts0); %根据星历计算卫星位置、速度、伪距
-                %----------------------------------------------------------------------------------------------------------%
-                % 时间用[s,ms,us]表示，避免乘光速时的精度损失
                 ts0 = channels(k).ts0; %码开始的时间，ms
-                ts0_code = [floor(ts0/1e3), mod(ts0,1e3), 0]; %码开始的时间，[s,ms,us]
+                ts0_code = [floor(ts0/1e3), mod(ts0,1e3), 0]; %码开始的时间，[s,ms,us]，时间用[s,ms,us]表示，避免乘光速时的精度损失
                 ts0_phase = [0, floor(codePhase/1023), mod(codePhase/1023,1)*1e3]; %码相位时间，[s,ms,us]
                 [sv(k,:),~] = sv_ecef(channels(k).ephemeris, ta, ts0_code+ts0_phase); %根据星历计算卫星位置、速度、伪距
-                %----------------------------------------------------------------------------------------------------------%
                 sv(k,8) = -channels(k).carrFreq/1575.42e6*299792458; %载波频率转化为速度
-                measureResults{k+1}(n,:) = sv(k,:); %存储
+                measureResults{k}(n,:) = sv(k,:); %存储
             end
         end
-        sv(sv(:,1)==0,:) = [];
+        sv(sv(:,1)==0,:) = []; %删除没跟踪到的行
         if size(sv,1)>=4 %定位
-            posResult(n,:) = pos_solve(sv);
+            pos = pos_solve(sv);
+            if abs(pos(7))>0.1 %钟差大于0.1ms时校正接收机钟
+                ta = ta - sec2smu(pos(7)/1000);
+            else
+                posResult(n,:) = pos; %钟准的时候存，时钟不准算的卫星位置有偏差，导致定位不准
+            end
         end
     end
+    
 end
 
-%% 关闭文件，关闭进度条
+%% 8.关闭文件，关闭进度条
 fclose(fileID);
 close(f);
 
 %% 删除跟踪结果中的空白数据
-for k=1:size(trackResults,1)
-    n = channels(k).n;
-    trackResults(k).dataIndex(n:end,:)    = [];
-    trackResults(k).ts0(n:end,:)          = [];
-    trackResults(k).remCodePhase(n:end,:) = [];
-    trackResults(k).codeFreq(n:end,:)     = [];
-    trackResults(k).remCarrPhase(n:end,:) = [];
-    trackResults(k).carrFreq(n:end,:)     = [];
-    trackResults(k).I_Q(n:end,:)          = [];
-    trackResults(k).disc(n:end,:)         = [];
-    trackResults(k).bitStartFlag(n:end,:) = [];
+for k=1:svN
+    trackResults(k) = trackResult_clean(trackResults(k));
 end
 
-%% 画I/Q图
-for k=1:size(trackResults,1)
-    figure
-    plot(trackResults(k).I_Q(1001:end,1),trackResults(k).I_Q(1001:end,4), 'LineStyle','none', 'Marker','.') %画1s之后的图
-    axis equal
-    title(['PRN = ',num2str(trackResults(k).PRN)])
+%% 打印通道日志
+clc
+for k=1:svN
+    if ~isempty(trackResults(k).log)
+        disp(['PRN ',num2str(trackResults(k).PRN)])
+        n = size(trackResults(k).log,1);
+        for kn=1:n
+            disp(trackResults(k).log(kn))
+        end
+        disp(' ')
+    end
 end
-clearvars k
 
-%% 标记比特开始位置
-% for k=1:size(trackResults,1)
-%     figure
-%     plot(trackResults(k).I_Q(:,1))
-%     hold on
-%     indexBitStart = find(trackResults(k).bitStartFlag==1); %寻找帧头阶段
-%     plot(indexBitStart, trackResults(k).I_Q(indexBitStart,1), 'LineStyle','none', 'Marker','.', 'Color','m')
-%     indexBitStart = find(trackResults(k).bitStartFlag==2); %校验帧头阶段
-%     plot(indexBitStart, trackResults(k).I_Q(indexBitStart,1), 'LineStyle','none', 'Marker','.', 'Color','b')
-%     indexBitStart = find(trackResults(k).bitStartFlag==3); %解析星历阶段
-%     plot(indexBitStart, trackResults(k).I_Q(indexBitStart,1), 'LineStyle','none', 'Marker','.', 'Color','r')
-%     title(['PRN = ',num2str(trackResults(k).PRN)])
-% end
-% clearvars k indexBitStart
+%% 保存星历
+ephemeris = struct('PRN',cell(svN,1), 'ephemeris',cell(svN,1));
+for k=1:svN
+    ephemeris(k).PRN = channels(k).PRN;
+    ephemeris(k).ephemeris = channels(k).ephemeris;
+end
+save(['./ephemeris/',file_path((end-22):(end-8)),'.mat'], 'ephemeris');
+
+%% 画图
+for k=1:svN
+    if trackResults(k).n==1 %不画没跟踪的通道
+        continue
+    end
+    
+    % 建立坐标轴
+    %----三图
+%     figure('Position', [380, 440, 1160, 480]);
+%     ax1 = axes('Position', [0.05, 0.12, 0.4, 0.8]);
+%     hold(ax1,'on');
+%     axis(ax1, 'equal');
+%     title(['PRN = ',num2str(svList(k))])
+%     ax2 = axes('Position', [0.5, 0.58, 0.46, 0.34]);
+%     hold(ax2,'on');
+%     ax3 = axes('Position', [0.5, 0.12, 0.46, 0.34]);
+%     hold(ax3,'on');
+%     grid(ax3,'on');
+    %----五图
+    figure('Position', [390, 280, 1140, 670]);
+    ax1 = axes('Position', [0.08, 0.4, 0.38, 0.53]);
+    hold(ax1,'on');
+    axis(ax1, 'equal');
+    title(['PRN = ',num2str(svList(k))])
+    ax2 = axes('Position', [0.53, 0.7 , 0.42, 0.25]);
+    hold(ax2,'on');
+    ax3 = axes('Position', [0.53, 0.38, 0.42, 0.25]);
+    hold(ax3,'on');
+    grid(ax3,'on');
+    ax4 = axes('Position', [0.53, 0.06, 0.42, 0.25]);
+    hold(ax4,'on');
+    grid(ax4,'on');
+    ax5 = axes('Position', [0.05, 0.06, 0.42, 0.25]);
+    hold(ax5,'on');
+    grid(ax5,'on');
+    
+    % 画图
+    plot(ax1, trackResults(k).I_Q(1001:end,1),trackResults(k).I_Q(1001:end,4), 'LineStyle','none', 'Marker','.') %I/Q图
+    plot(ax2, trackResults(k).dataIndex/sampleFreq, trackResults(k).I_Q(:,1)) %I_P图
+    index = find(trackResults(k).CN0~=0);
+    plot(ax3, trackResults(k).dataIndex(index)/sampleFreq, trackResults(k).CN0(index), 'LineWidth',2) %载噪比
+    
+%     index = find(trackResults(k).bitStartFlag==double('H')); %寻找帧头阶段（粉色）
+%     plot(ax2, trackResults(k).dataIndex(index)/sampleFreq, trackResults(k).I_Q(index,1), 'LineStyle','none', 'Marker','.', 'Color','m')
+%     index = find(trackResults(k).bitStartFlag==double('C')); %校验帧头阶段（蓝色）
+%     plot(ax2, trackResults(k).dataIndex(index)/sampleFreq, trackResults(k).I_Q(index,1), 'LineStyle','none', 'Marker','.', 'Color','b')
+%     index = find(trackResults(k).bitStartFlag==double('E')); %解析星历阶段（红色）
+%     plot(ax2, trackResults(k).dataIndex(index)/sampleFreq, trackResults(k).I_Q(index,1), 'LineStyle','none', 'Marker','.', 'Color','r')
+
+    plot(ax4, trackResults(k).dataIndex/sampleFreq, trackResults(k).carrFreq, 'LineWidth',1.5) %载波频率
+    plot(ax5, trackResults(k).dataIndex/sampleFreq, trackResults(k).others(:,1)) %视线方向加速度
+    
+    % 调整坐标轴
+    set(ax2, 'XLim',[0,msToProcess/1000])
+    
+    set(ax3, 'XLim',[0,msToProcess/1000])
+    set(ax3, 'YLim',[30,60])
+    
+    set(ax4, 'XLim',[0,msToProcess/1000])
+    set(ax5, 'XLim',[0,msToProcess/1000])
+end
 
 %% 清除变量
-clearvars -except acqResults file_path sample_offset channels trackResults ta measureResults posResult
+% clearvars -except channels trackResults ...
+%                   receiverTime measureResults posResult
 
 %% 计时结束
 toc

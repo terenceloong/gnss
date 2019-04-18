@@ -1,15 +1,7 @@
-function [acqResults, file_path, sample_offset] = GPS_L1_CA_acq(file_name, sample_offset, N)
+function acqResults = GPS_L1_CA_acq(file_path, sample_offset, N)
 % GPS信号捕获，32颗卫星全搜索，连续搜索2段数据，结果存在变量acqResults中
 % sample_offset：抛弃前多少个采样点处开始处理
 % N：FFT点数
-
-%%
-[~,gnss_path] = system('echo %GNSS_PATH%');
-if strcmp(gnss_path(1),'%')
-    error('Can''t find environment variable GNSS_PATH !!!');
-end
-gnss_path(end) = '\';
-file_path = [gnss_path, file_name, '.dat'];
 
 %%
 Ns = N; %采样点数

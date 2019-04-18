@@ -1,7 +1,6 @@
 function ephemeris = GPS_L1_CA_ephemeris(bits)
 % 输入完整1500比特导航电文和上一字最后两位（±1），解析GPS星历
-
-ephemeris = zeros(26,1);
+% 如果星历为空说明星历错误
 
 % 电平翻转
 bits = -bits(62) * bits;
@@ -15,6 +14,7 @@ D30 = bits(2);
 bits(1:2) = [];
 
 gpsPi = 3.1415926535898; 
+subframeTable = zeros(1,5); %如果有第几帧，对应的位置1
 
 for k=0:4
     subframe = bits(k*300+(1:300)); %取一个子帧
@@ -27,6 +27,12 @@ for k=0:4
     
     subframeID = bin2dec(subframe(50:52)); %子帧ID
     
+    % 校验，如果子帧号不属于1~5，或者59、60两位不为0，认为星历错误
+    if ~ismember(subframeID,1:5) || subframe(59)~='0' || subframe(60)~='0'
+        ephemeris = [];
+        return
+    end
+    
     switch subframeID
         case 1
             TOW = (bin2dec(subframe(31:47))-1)*6; %------>
@@ -37,6 +43,7 @@ for k=0:4
             af2 = twosComp2dec(subframe(241:248)) * 2^(-55);
             af1 = twosComp2dec(subframe(249:264)) * 2^(-43);
             af0 = twosComp2dec(subframe(271:292)) * 2^(-31);
+            subframeTable(1) = 1;
         case 2
             IODE = bin2dec(subframe(61:68));
             Crs = twosComp2dec(subframe(69:84)) * 2^(-5);
@@ -47,6 +54,7 @@ for k=0:4
             Cus = twosComp2dec(subframe(211:226)) * 2^(-29);
             sqa = bin2dec([subframe(227:234),subframe(241:264)]) * 2^(-19);
             toe = bin2dec(subframe(271:286)) * 2^4;
+            subframeTable(2) = 1;
         case 3
             Cic = twosComp2dec(subframe(61:76)) * 2^(-29);
             Omega0 = twosComp2dec([subframe(77:84),subframe(91:114)]) * 2^(-31) * gpsPi;
@@ -56,14 +64,23 @@ for k=0:4
             omega = twosComp2dec([subframe(197:204),subframe(211:234)]) * 2^(-31) * gpsPi;
             Omega_dot = twosComp2dec(subframe(241:264)) * 2^(-43) * gpsPi;
             i_dot = twosComp2dec(subframe(279:292)) * 2^(-43) * gpsPi;
+            subframeTable(3) = 1;
         case 4
+            subframeTable(4) = 1;
         case 5
+            subframeTable(5) = 1;
         otherwise
     end
 end
 
-flags = 0;
+% 如果没有所有子帧，说明星历错误
+if sum(subframeTable)~=5
+    ephemeris = [];
+	return
+end
 
+ephemeris = zeros(26,1);
+flags = 0;
 ephemeris(1)  = week;
 ephemeris(2)  = IODC;
 ephemeris(3)  = IODE;

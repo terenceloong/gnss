@@ -1,7 +1,7 @@
 function dt = sample2dt(n, sampleFreq)
 % 采样点数转化为时间增量（n必须大于0）
 
-dt = [0,0,0]; %[s, ms, us]
+dt = [0,0,0]; %[s,ms,us]
 
 % dt(1) = floor(n/sampleFreq);
 % dt(2) = floor(rem(n,sampleFreq) * (1e3/sampleFreq));

@@ -1,5 +1,9 @@
 function code = GPS_L1_CA_generate(PRN)
 
+if ~ismember(PRN, 1:32)
+    error('PRN error!')
+end
+
 S = [2,  6;
      3,  7;
      4,  8;

@@ -1,4 +1,5 @@
 addpath('acquisition')
+addpath('ambiguity')
 addpath('tracking')
 addpath('parsing')
 addpath('display')

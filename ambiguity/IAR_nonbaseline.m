@@ -1,0 +1,158 @@
+function [Rx, att, Nx, pe] = IAR_nonbaseline(A, p, lamda, rho)
+% 未知基线长度求解基线矢量和整周模糊度
+% Integer Ambiguity Resolution
+% Rx = [x; y; z]
+% att = [psi, theta, rho]基线矢量姿态
+% Nx = [N1; N2; ...; Nn]，第一个始终为0
+% pe为量测误差的模长，所求的整周模糊度要使它最小
+% A的各行为卫星指向天线的单位矢量
+% p为两天线相位差不足整周部分，单位：周
+% lamda为波长，单位：m
+% rho为基线长度范围，[rho_min,rho_max]，单位：m
+
+% 与第一行做差，排除两天线路径不等长的影响（双差法）
+A = A - ones(size(A,1),1)*A(1,:);
+A(1,:) = [];
+p = p - p(1);
+p(1) = [];
+
+% 确定整周模糊度搜索范围
+N_max = 2*ceil(rho/lamda); %整周上界，乘2是因为上一步的做差
+N_min = -N_max; %整周下界
+
+% 降维搜索（提升计算效率）
+min_pe = inf; %存储当前最小的量测误差
+r11 = A(1,1);
+r12 = A(1,2);
+r13 = A(1,3);
+r21 = A(2,1);
+r22 = A(2,2);
+r23 = A(2,3);
+r31 = A(3,1);
+r32 = A(3,2);
+r33 = A(3,3);
+f = r23*r12 - r13*r22;
+d2 = (r23*r11 - r13*r21) /  f;
+e2 = (r22*r11 - r12*r21) / -f;
+a = 1 + d2^2 + e2^2; %a>0
+for N1=N_min:N_max
+    for N2=N_min:N_max
+        % 判断方程是否有解
+        % r11*x + r12*y + r13*z = s1 = (phi1 + N1)*lamda
+        % r21*x + r22*y + r23*z = s2 = (phi2 + N2)*lamda
+        % rho(1)^2 <= x^2 + y^2 + z^2 <= rho(2)^2
+        s1 = (p(1)+N1)*lamda;
+        s2 = (p(2)+N2)*lamda;
+        d1 = (r23*s1 - r13*s2 ) /  f;
+        e1 = (r22*s1 - r12*s2 ) / -f;
+        b = -2 * (d1*d2 + e1*e2);
+        c1 = d1^2 + e1^2 - rho(1)^2;
+        c2 = d1^2 + e1^2 - rho(2)^2; %rho(2)>rho(1)，c2<c1
+        h1 = b^2-4*a*c1;
+        h2 = b^2-4*a*c2; %h为单调递减函数，c2<c1，h2>h1，只要h2<0，h1必然小于零
+        if h2<0 %方程无解
+            continue
+        end
+        
+        %判断是否有整数的N3
+        if h1<=0 %N3为单区间
+            x = (-b-sqrt(h2))/(2*a);
+            y = d1 - d2*x;
+            z = e1 - e2*x;
+            N3_e1 = (r31*x + r32*y + r33*z)/lamda - p(3); %N3的一个边界
+            x = (-b+sqrt(h2))/(2*a);
+            y = d1 - d2*x;
+            z = e1 - e2*x;
+            N3_e2 = (r31*x + r32*y + r33*z)/lamda - p(3); %N3的另一个边界
+            % 寻找N3两个边界中的整数值
+            N3_n = integer_between_edge(N3_e1, N3_e2);
+        else %N3为双区间
+            x = (-b-sqrt(h1))/(2*a);
+            y = d1 - d2*x;
+            z = e1 - e2*x;
+            N3_e1 = (r31*x + r32*y + r33*z)/lamda - p(3); %N3第一区间的一个边界
+            x = (-b-sqrt(h2))/(2*a);
+            y = d1 - d2*x;
+            z = e1 - e2*x;
+            N3_e2 = (r31*x + r32*y + r33*z)/lamda - p(3); %N3第一区间的另一个边界
+            % 寻找N3两个边界中的整数值
+            N3_n1 = integer_between_edge(N3_e1, N3_e2);
+            %=============================================================%
+            x = (-b+sqrt(h1))/(2*a);
+            y = d1 - d2*x;
+            z = e1 - e2*x;
+            N3_e1 = (r31*x + r32*y + r33*z)/lamda - p(3); %N3第二区间的一个边界
+            x = (-b+sqrt(h2))/(2*a);
+            y = d1 - d2*x;
+            z = e1 - e2*x;
+            N3_e2 = (r31*x + r32*y + r33*z)/lamda - p(3); %N3第二区间的另一个边界
+            % 寻找N3两个边界中的整数值
+            N3_n2 = integer_between_edge(N3_e1, N3_e2);
+            %=============================================================%
+            N3_n = [N3_n1, N3_n2];
+        end
+        
+        for N3=N3_n
+            % 1.计算基线矢量
+            R = A(1:3,:) \ ((p(1:3)+[N1;N2;N3])*lamda);
+            % 2.计算所有整周模糊度
+            N = round(A*R/lamda-p);
+            % 3.最小二乘计算基线矢量
+            R = (A'*A) \ (A'*(p+N)*lamda);
+            % 4.比较量测误差
+            pe = norm(A*R/lamda-N-p);
+            if pe<min_pe
+                min_pe = pe;
+                Rx = R;
+                Nx = N;
+            end
+        end
+    end
+end
+
+% 全维搜索
+% min_pe = inf; %存储当前最小的量测误差
+% for N1=N_min:N_max
+%     for N2=N_min:N_max
+%         for N3=N_min:N_max
+%             % 1.计算基线矢量
+%             R = A(1:3,:) \ ((p(1:3)+[N1;N2;N3])*lamda);
+%             % 2.校验基线长度
+%             r = norm(R);
+%             if r<rho(1) || r>rho(2)
+%                 continue
+%             end
+%             % 3.计算所有整周模糊度
+%             N = round(A*R/lamda-p);
+%             % 4.最小二乘计算基线矢量
+%             R = (A'*A) \ (A'*(p+N)*lamda);
+%             % 5.比较量测误差
+%             pe = norm(A*R/lamda-N-p);
+%             if pe<min_pe
+%                 min_pe = pe;
+%                 Rx = R;
+%                 Nx = N;
+%             end
+%         end
+%     end
+% end
+
+att = [0,0,0];
+att(3) = norm(Rx); %基线长度
+att(1) = atan2d(Rx(2),Rx(1)); %基线航向角
+att(2) = -asind(Rx(3)/att(3)); %基线俯仰角
+Nx = [0; Nx];
+pe = min_pe;
+
+end
+
+function n = integer_between_edge(e1, e2)
+    if e1>e2
+        eu = e1; %上界
+        ed = e2; %下界
+    else
+        eu = e2; %上界
+        ed = e1; %下界
+    end
+    n = ceil(ed):floor(eu); %下界向上取整，上界向下取整
+end
