@@ -29,6 +29,7 @@ svList = sv(:,1)'; %输出卫星编号
 %% 画图
 sv(:,2) = mod(sv(:,2)-90,360)/180*pi; %为了画图时北向上，方位角减90°
 
+figure
 polarscatter(sv(:,2),sv(:,3), 220, 'MarkerEdgeColor','g', 'MarkerFaceColor','y');
 ax = gca;
 ax.RLim = [0 90];

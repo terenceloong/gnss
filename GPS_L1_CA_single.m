@@ -8,14 +8,16 @@ tic
 % 4颗卫星10s数据耗时约16s
 
 %% 文件路径
-file_path = 'E:\GNSS data\outdoor_static\data_20190409_213910_ch1.dat';
+file_path = 'F:\数据4_30\data_20190430_164934_ch1.dat';
+plot_gnss_file(file_path);
 sample_offset = 0*4e6;
 
 %% 全局变量
 msToProcess = 45*1000; %处理总时间
 sampleFreq = 4e6; %接收机采样频率
 
-p0 = [45.74088083, 126.62694533, 197]; %参考位置********************
+% 参考位置********************
+p0 = [45.730952, 126.624970, 212]; %2A楼顶
 
 buffBlkNum = 40;                     %采样数据缓存块数量（要保证捕获时存储恰好从头开始）
 buffBlkSize = 4000;                  %一个块的采样点数（1ms）
@@ -30,7 +32,7 @@ tf = sscanf(file_path((end-22):(end-8)), '%4d%02d%02d_%02d%02d%02d')'; %数据文件
 ta = [ts,0,0] + sample2dt(sample_offset, sampleFreq); %初始化接收机时间，[s,ms,us]
 ta = time_carry(round(ta,2)); %取整
 
-%% 2.根据历书获取当前可能见到的卫星
+%% 2.根据历书获取当前可能见到的卫星（*）
 % svList = [2;6;12];
 svList = gps_constellation(tf, p0);
 svN = length(svList);
@@ -61,7 +63,7 @@ end
 m = msToProcess/10;
 % 接收机时间
 receiverTime = zeros(m,3); %[s,ms,us]
-%定位结果
+% 定位结果
 posResult = ones(m,8) * NaN; %位置、速度、钟差、钟频差
 %各卫星位置、伪距、速度、伪距率测量结果
 measureResults = cell(svN,1);
@@ -139,7 +141,7 @@ for t=1:msToProcess
                         GPS_L1_CA_track(channels(k), sampleFreq, buffSize, [buff(trackDataTail:end),buff(1:trackDataHead)]);
                 end
                 % 存跟踪结果（跟踪结果）
-                trackResults(k).I_Q(n,:)          = I_Q; 
+                trackResults(k).I_Q(n,:)          = I_Q;
                 trackResults(k).disc(n,:)         = disc;
                 trackResults(k).bitStartFlag(n,:) = bitStartFlag;
                 trackResults(k).CN0(n,:)          = channels(k).CN0;
@@ -168,7 +170,8 @@ for t=1:msToProcess
             end
         end
         sv(sv(:,1)==0,:) = []; %删除没跟踪到的行
-        if size(sv,1)>=4 %定位
+        %--------定位--------%
+        if size(sv,1)>=4
             pos = pos_solve(sv);
             if abs(pos(7))>0.1 %钟差大于0.1ms时校正接收机钟
                 ta = ta - sec2smu(pos(7)/1000);
@@ -189,7 +192,7 @@ for k=1:svN
     trackResults(k) = trackResult_clean(trackResults(k));
 end
 
-%% 打印通道日志
+%% 打印通道日志（*）
 clc
 for k=1:svN
     if ~isempty(trackResults(k).log)
@@ -201,6 +204,7 @@ for k=1:svN
         disp(' ')
     end
 end
+clearvars k n kn
 
 %% 保存星历
 ephemeris = struct('PRN',cell(svN,1), 'ephemeris',cell(svN,1));
@@ -210,11 +214,13 @@ for k=1:svN
 end
 save(['./ephemeris/',file_path((end-22):(end-8)),'.mat'], 'ephemeris');
 
-%% 画图
+%% 画图（*）
 for k=1:svN
     if trackResults(k).n==1 %不画没跟踪的通道
         continue
     end
+    
+    screenSize = get(0,'ScreenSize'); %获取屏幕尺寸
     
     % 建立坐标轴
     %----三图
@@ -229,7 +235,13 @@ for k=1:svN
 %     hold(ax3,'on');
 %     grid(ax3,'on');
     %----五图
-    figure('Position', [390, 280, 1140, 670]);
+    if screenSize(3)==1920 %根据屏幕尺寸设置画图范围
+        figure('Position', [390, 280, 1140, 670]);
+    elseif screenSize(3)==1368
+        figure('Position', [114, 100, 1140, 670]);
+    else
+        error('Screen size error!')
+    end
     ax1 = axes('Position', [0.08, 0.4, 0.38, 0.53]);
     hold(ax1,'on');
     axis(ax1, 'equal');
@@ -272,9 +284,13 @@ for k=1:svN
     set(ax5, 'XLim',[0,msToProcess/1000])
 end
 
-%% 清除变量
-% clearvars -except channels trackResults ...
-%                   receiverTime measureResults posResult
+clearvars k screenSize ax1 ax2 ax3 ax4 ax5 index
+
+%% 清除变量（*）
+clearvars -except sampleFreq msToProcess ...
+                  p0 tf svList svN ...
+                  channels trackResults ...
+                  receiverTime measureResults posResult
 
 %% 计时结束
 toc

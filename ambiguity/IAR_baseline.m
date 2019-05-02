@@ -1,8 +1,8 @@
-function [Rx, att, Nx, pe] = IAR_baseline(A, p, lamda, rho)
+function [att, Rx, Nx, pe] = IAR_baseline(A, p, lamda, rho)
 % 已知基线长度求解基线矢量和整周模糊度
 % Integer Ambiguity Resolution
-% Rx = [x; y; z]
 % att = [psi, theta, rho]基线矢量姿态
+% Rx = [x; y; z]
 % Nx = [N1; N2; ...; Nn]，第一个始终为0
 % pe为量测误差的模长，所求的整周模糊度要使它最小
 % A的各行为卫星指向天线的单位矢量
@@ -21,7 +21,7 @@ N_max = 2*ceil(rho/lamda); %整周上界，乘2因为上一步的做差
 N_min = -N_max; %整周下界
 
 % 搜索
-min_pe = inf; %存储当前最小的量测误差
+pe_min = 100; %存储当前最小的量测误差
 r11 = A(1,1);
 r12 = A(1,2);
 r13 = A(1,3);
@@ -60,8 +60,8 @@ for N1=N_min:N_max
             R = (A'*A) \ (A'*(p+N)*lamda);
             % 4.比较量测误差
             pe = norm(A*R/lamda-N-p);
-            if pe<min_pe
-                min_pe = pe;
+            if pe<pe_min
+                pe_min = pe;
                 Rx = R;
                 Nx = N;
             end
@@ -74,6 +74,6 @@ att(3) = norm(Rx); %基线长度
 att(1) = atan2d(Rx(2),Rx(1)); %基线航向角
 att(2) = -asind(Rx(3)/att(3)); %基线俯仰角
 Nx = [0; Nx];
-pe = min_pe;
+pe = pe_min;
 
 end

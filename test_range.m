@@ -1,16 +1,18 @@
 function test_range()
 
+%% 输入参数
+p0 = evalin('base', 'p0');
 measureResults = evalin('base', 'measureResults');
 
-% 参考坐标
-p0 = lla2ecef([45.74088083, 126.62694533, 197]);
-% p0 = lla2ecef([45.741734, 126.62152, 212]);
+%% 计算
+p0 = lla2ecef(p0); %参考坐标，ecef
 
 T = size(measureResults{1},1); %列数
 N = length(measureResults); %通道数
 
 d_range = ones(T,N) * NaN; %测距误差
 d_vel   = ones(T,N) * NaN; %测速误差
+
 for t=1:T
     for k=1:N
         if ~isnan(measureResults{k}(t,1)) %存在测量结果
@@ -28,9 +30,11 @@ for t=1:T
     end
 end
 
-assignin('base', 'd_range', d_range);
-assignin('base', 'd_vel',   d_vel);
+%% 输出
+% assignin('base', 'd_range', d_range);
+% assignin('base', 'd_vel',   d_vel);
 
+%% 画图
 figure
 plot((1:T)/100, d_range)
 legend_text = cell(1,N);

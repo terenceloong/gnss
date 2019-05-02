@@ -33,8 +33,8 @@ for k=1:n
 end
 
 %% 求解整周模糊度
-% [Rx, att, Nx, pe] = IAR_baseline(A, p, lamda, rho); %已知基线求解整周模糊度
-[Rx, att, Nx, pe] = IAR_nonbaseline(A, p, lamda, rho+[-0.1,0.1]); %未知基线求解整周模糊度
+% [att, Rx, Nx, pe] = IAR_baseline(A, p, lamda, rho); %已知基线求解整周模糊度
+[att, Rx, Nx, i1, pe] = IAR_nonbaseline(A, p, lamda, rho+[-0.1,0.1]); %未知基线求解整周模糊度
 
 if length(unique(N-Nx))~=1 %N-Nx应该都相同，如果不同说明算错了
     error('Error!')

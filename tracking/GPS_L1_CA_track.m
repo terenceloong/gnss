@@ -187,9 +187,9 @@ switch msgStage %I, B, W, H, C, E
         if cnt_m==2000 %2s后检验统计表
             if max(bitSyncTable)>15 && (sum(bitSyncTable)-max(bitSyncTable))<=5 %确定电平翻转位置（电平翻转大都发生在一个点上）
                 %------------------------------------------------------------------------------------%
-%                 trackStage = 'K'; %比特同步后转到卡尔曼滤波跟踪
-%                 log = [log; ...
-%                        string(['Start Kalman tracking at ',num2str(dataIndex/sampleFreq,'%.8f'),'s'])];
+                trackStage = 'K'; %比特同步后转到卡尔曼滤波跟踪
+                log = [log; ...
+                       string(['Start Kalman tracking at ',num2str(dataIndex/sampleFreq,'%.8f'),'s'])];
                 %------------------------------------------------------------------------------------%
                 [~,cnt_m] = max(bitSyncTable);
                 bitSyncTable = zeros(1,20); %比特同步统计表清零
@@ -260,14 +260,15 @@ switch msgStage %I, B, W, H, C, E
                         frameBuffPoint = 0;
                     end
                 case 'C' %<<====校验帧头
-                    if frameBuffPoint==62 %存储了两个字
-                        if GPS_L1_CA_check(frameBuff(1:32))==1 && GPS_L1_CA_check(frameBuff(31:62))==1 %校验通过
+                    if frameBuffPoint==310 %存储了一个子帧，2+300+8
+                        if GPS_L1_CA_check(frameBuff(1:32))==1 && GPS_L1_CA_check(frameBuff(31:62))==1  && ... %校验通过
+                            abs(sum(frameBuff(303:310).*[1,-1,-1,-1,1,-1,1,1]))==8
                             % 获取电文时间
                             % frameBuff(32)为上一字的最后一位，校验时控制电平翻转，为1表示翻转，为0表示不翻转，参见ICD-GPS最后几页
                             bits = -frameBuff(32) * frameBuff(33:49); %电平翻转，31~47比特
                             bits = dec2bin(bits>0)'; %±1数组转化为01字符串
                             TOW = bin2dec(bits); %01字符串转换为十进制数
-                            ts0 = (TOW*6-4.8)*1000 - timeIntMs; %ms
+                            ts0 = (TOW*6+0.16)*1000 - timeIntMs; %ms，0.16=8/50
                             channel.inverseFlag = frameBuff(62); %相位翻转标志，1表示翻转，-1表示不翻转
                             if ~isempty(channel.ephemeris)
                                 channel.state = 2; %更新状态（知道码发射时间，而且有星历）
@@ -276,20 +277,51 @@ switch msgStage %I, B, W, H, C, E
                             log = [log; ...
                                    string(['Start parse ephemeris at ',num2str(dataIndex/sampleFreq,'%.8f'),'s'])];
                         else %校验未通过
-                            for k=11:62 %检查其他比特中有没有帧头
+                            for k=11:310 %检查其他比特中有没有帧头
                                 if abs(sum(frameBuff(k+(-7:0)).*[1,-1,-1,-1,1,-1,1,1]))==8 %检测到疑似帧头
-                                    frameBuff(1:72-k) = frameBuff(k-9:62); %将帧头和后面的比特提前，72-k = 62-(k-9)+1
-                                    frameBuffPoint = 72-k;
+                                    frameBuff(1:320-k) = frameBuff(k-9:310); %将帧头和后面的比特提前，320-k = 310-(k-9)+1
+                                    frameBuffPoint = 320-k;
                                     break
                                 end
                             end
-                            if frameBuffPoint==62 %没检测到疑似帧头
-                                frameBuff(1:9) = frameBuff(54:62); %将未检测的比特提前
+                            if frameBuffPoint==310 %没检测到疑似帧头
+                                frameBuff(1:9) = frameBuff(302:310); %将未检测的比特提前
                                 frameBuffPoint = 9;
                                 msgStage = 'H'; %再次寻找帧头
                             end
                         end
                     end
+%                     if frameBuffPoint==62 %存储了两个字
+%                         if GPS_L1_CA_check(frameBuff(1:32))==1 && GPS_L1_CA_check(frameBuff(31:62))==1  && ... %校验通过
+%                             frameBuff(61)==frameBuff(62) %有可能出现该字的开头恰好为帧头的样子，加一重判断，还可能有其他情况
+%                             % 获取电文时间
+%                             % frameBuff(32)为上一字的最后一位，校验时控制电平翻转，为1表示翻转，为0表示不翻转，参见ICD-GPS最后几页
+%                             bits = -frameBuff(32) * frameBuff(33:49); %电平翻转，31~47比特
+%                             bits = dec2bin(bits>0)'; %±1数组转化为01字符串
+%                             TOW = bin2dec(bits); %01字符串转换为十进制数
+%                             ts0 = (TOW*6-4.8)*1000 - timeIntMs; %ms
+%                             channel.inverseFlag = frameBuff(62); %相位翻转标志，1表示翻转，-1表示不翻转
+%                             if ~isempty(channel.ephemeris)
+%                                 channel.state = 2; %更新状态（知道码发射时间，而且有星历）
+%                             end
+%                             msgStage = 'E'; %进入解析星历模式
+%                             log = [log; ...
+%                                    string(['Start parse ephemeris at ',num2str(dataIndex/sampleFreq,'%.8f'),'s'])];
+%                         else %校验未通过
+%                             for k=11:62 %检查其他比特中有没有帧头
+%                                 if abs(sum(frameBuff(k+(-7:0)).*[1,-1,-1,-1,1,-1,1,1]))==8 %检测到疑似帧头
+%                                     frameBuff(1:72-k) = frameBuff(k-9:62); %将帧头和后面的比特提前，72-k = 62-(k-9)+1
+%                                     frameBuffPoint = 72-k;
+%                                     break
+%                                 end
+%                             end
+%                             if frameBuffPoint==62 %没检测到疑似帧头
+%                                 frameBuff(1:9) = frameBuff(54:62); %将未检测的比特提前
+%                                 frameBuffPoint = 9;
+%                                 msgStage = 'H'; %再次寻找帧头
+%                             end
+%                         end
+%                     end
                 case 'E' %<<====解析星历
                     if frameBuffPoint==1502 %跟踪完5帧
                         ephemeris = GPS_L1_CA_ephemeris(frameBuff); %解析星历
